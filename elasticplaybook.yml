@@ -1,0 +1,215 @@
+---
+- hosts: all
+  remote_user: centos
+  gather_facts: true
+  become: true
+  become_method: sudo
+  become_user: root
+  vars:
+    password: 0mbu9sT4z8HPm^ZO
+    user: tarique
+
+ # Create the User and group
+  tasks:
+  - name: Create User Tarique
+    action:
+      user name={{ user }} password={{ password|password_hash('sha512') }} update_password=always
+      shell=/bin/bash home=/home/{{ user }}
+
+  - name: Ensure 'tarique' Group Is Present
+    group:
+      name: tarique
+      state: present
+
+# Grant user the sudo access      
+
+  - name: Allow 'tarique' Group To Have Passwordless Sudo
+    lineinfile:
+      line: "%tarique ALL=(ALL) NOPASSWD: ALL"
+      dest: /etc/sudoers
+      regexp: "^%admin"
+      state: present
+      validate: "visudo -cf %s"
+
+# Create the Directory to store elasticsearch files
+
+  - name: Create a Directory Elasticsearch
+    become: true
+    become_user: tarique
+    file:
+      path: /home/tarique/elasticsearch
+      state: directory
+      mode: 0755
+      owner: tarique
+      group: tarique
+
+# Install Java because Elasticsearch requires the java runtime
+
+  - name: Install Java
+    become: true
+    become_user: root
+    become_method: sudo
+    yum:
+      name: java-1.8.0-openjdk.x86_64
+      state: present
+
+# Download the Elasticsearch setup file
+
+  - name: Download ElasticSearch .tar File
+    become: true
+    become_user: tarique
+    get_url:
+      url: "https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-7.12.0-linux-x86_64.tar.gz"
+      dest: /home/tarique/elasticsearch
+      mode: 0755
+      group: tarique
+      owner: tarique
+
+# Extract the file content
+
+  - name: Unarchive the File
+    unarchive:
+      src: /home/tarique/elasticsearch/elasticsearch-7.12.0-linux-x86_64.tar.gz
+      dest: /home/tarique/elasticsearch
+      mode: 0755
+      group: tarique
+      owner: tarique
+      remote_src: true
+
+# Create Instance.yml file
+
+  - name: Create instance.yml File to Generate Certs
+    become: true
+    become_user: tarique
+    file:
+      path: "/home/tarique/elasticsearch/instance.yml"
+      state: touch
+      mode: 0755
+      group: tarique
+      owner: tarique
+
+# Add content to the file 
+
+  - name: Add Content In instance.yml File
+    become: true
+    become_user: tarique
+    copy:
+      dest: "/home/tarique/elasticsearch/instance.yml"
+      content: |
+        instances:
+        -
+          name: "master-1"
+          ip:
+          - "127.0.0.1"
+
+# Generate the certificate for SSL 
+
+  - name: Generate the CA-Certs
+    become: true
+    become_user: tarique
+    shell: "bin/elasticsearch-certutil cert --keep-ca-key --pem --in /home/tarique/elasticsearch/instance.yml --out /home/tarique/elasticsearch/certs.zip"
+    args:
+      chdir: /home/tarique/elasticsearch/elasticsearch-7.12.0
+    register: ca_certs
+
+# Extract Certificates
+
+  - name: Unzip the CA-Certs
+    become: true
+    become_user: tarique
+    unarchive:
+      src: /home/tarique/elasticsearch/certs.zip
+      dest: /home/tarique/elasticsearch
+      mode: 0755
+      group: tarique
+      owner: tarique
+      remote_src: true
+
+# Create Certificate DIR to store the certs
+  - name: Create the Certs Directory
+    become: true
+    become_user: tarique
+    file:
+      path: /home/tarique/elasticsearch/certs
+      state: directory
+      mode: 0755
+      owner: tarique
+      group: tarique
+
+ # Copy file into the cert directory
+
+  - name: Copy CA Files Into he Certs Directory
+    copy:
+      src: /home/tarique/elasticsearch/ca/
+      dest: /home/tarique/elasticsearch/certs/
+      mode: 0755
+      group: tarique
+      owner: tarique
+      remote_src: true
+
+# Copy Node File
+
+  - name: Copy Node Files into the Certs Directory
+    copy:
+      src: /home/tarique/elasticsearch/master-1/
+      dest: /home/tarique/elasticsearch/certs/
+      mode: 0755
+      group: tarique
+      owner: tarique
+      remote_src: true
+
+# Copy the certs dir to the elasticsearch directory
+
+  - name: Copy The Certs Folder to the Elasticsearch Configuration Directory
+    copy:
+      src: /home/tarique/elasticsearch/certs
+      dest: /home/tarique/elasticsearch/elasticsearch-7.12.0/config/
+      mode: 0755
+      group: tarique
+      owner: tarique
+      remote_src: true
+
+# Added essential configurations in the elasticsearch.yml for SSL
+
+  - name: Add New Values to the elasticsearch.yml File
+    lineinfile:
+      path: /home/tarique/elasticsearch/elasticsearch-7.12.0/config/elasticsearch.yml
+      state: present
+      line: "{{ item }}"
+    with_items:
+      - "cluster.name: elk-cluster"
+      - "http.port: 9200"
+      - "xpack.security.enabled: true"
+      - "xpack.security.http.ssl.enabled: true"
+      - "xpack.security.transport.ssl.enabled: true"
+      - "xpack.security.http.ssl.key: /home/tarique/elasticsearch/elasticsearch-7.12.0/config/certs/master-1.key"
+      - "xpack.security.http.ssl.certificate: /home/tarique/elasticsearch/elasticsearch-7.12.0/config/certs/master-1.crt"
+      - "xpack.security.http.ssl.certificate_authorities: /home/tarique/elasticsearch/elasticsearch-7.12.0/config/certs/ca.crt"
+      - "xpack.security.transport.ssl.key: /home/tarique/elasticsearch/elasticsearch-7.12.0/config/certs/master-1.key"
+      - "xpack.security.transport.ssl.certificate: /home/tarique/elasticsearch/elasticsearch-7.12.0/config/certs/master-1.crt"
+      - "xpack.security.transport.ssl.certificate_authorities: /home/tarique/elasticsearch/elasticsearch-7.12.0/config/certs/ca.crt"
+
+# Start the elasticsearch 
+
+  - name: Start Elasticsearch Script
+    become: true
+    become_user: tarique
+    command: "./elasticsearch -d"
+    args:
+      chdir: /home/tarique/elasticsearch/elasticsearch-7.12.0/bin
+
+# Generate the Elastic Password for secure Connection
+
+  - name: Generate Elastic User Password
+    expect:
+    command: ./elasticsearch-setup-passwords auto
+    responses:
+      '(?i)is this ok': 'y\n'
+    args:
+      chdir: /home/tarique/elasticsearch/elasticsearch-7.12.0/bin 
+  when: elasticsearch_passwords_output.stdout_lines[-1] | regex_search('(?i)run bin/elasticsearch-setup-passwords auto')
+
+ # end of the playbook, at this stage user should be able to communicate with the elasticseach cluster 
+ # with username and password over secure connection 
+
+...
