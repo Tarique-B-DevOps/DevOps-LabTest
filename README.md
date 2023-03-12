@@ -1,4 +1,4 @@
-# Setup Elasticsearch on AWS EC2 instance with SSL and password authentication enabled.
+# Setup Elasticsearch on AWS EC2 Instance With SSL and Password Authentication Enabled.
 
 ## Automation Tools Used :
 
